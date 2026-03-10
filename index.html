@@ -135,6 +135,10 @@
     body.light header, body.light .tabs { background: #fff; }
     body.light .card { background: #fff; border-color: #ddd; }
 
+    /* SCHED BOX DIMMED STATE */
+    @keyframes subtlePulse { 0%,100%{opacity:0.45} 50%{opacity:0.6} }
+    #sched-recipient-box.tag-active { animation: subtlePulse 1.8s ease-in-out 3; }
+
     /* CALENDAR EVENT SETTINGS ROWS */
     .event-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;background:var(--surface2);margin-bottom:5px;transition:opacity 0.2s;}
     .event-row.event-disabled{opacity:0.38;}
@@ -1103,58 +1107,96 @@
   }
 
   // ─── SCHEDULE RECIPIENT ──────────────────────────────────
+  // selectedSchedTags: Set of tag strings (multi-select)
+  // selectedSchedContact: single contact object or null
   let selectedSchedContact = null;
-  let selectedSchedTag = null;
+  let selectedSchedTags    = new Set();
 
   function renderSchedTagPills() {
     const tags = getAllTags();
     const container = document.getElementById('sched-tag-pills');
-    if (!tags.length) { container.innerHTML = ''; return; }
+    if (!tags.length) { container.style.display = 'none'; return; }
+    container.style.display = 'flex';
     container.innerHTML = tags.map(t => {
       const [bg, fg] = tagColor(t);
-      const isSelected = selectedSchedTag === t;
-      return `<span class="tag-pill" onclick="selectSchedTag('${t}')" style="background:${bg};color:${fg};opacity:${isSelected?'1':'0.45'};outline:${isSelected?'2px solid '+bg:'none'};outline-offset:2px;cursor:pointer;transition:all 0.15s;">${t}${isSelected?' ✓':''}</span>`;
+      const isSelected = selectedSchedTags.has(t);
+      return `<span class="tag-pill" onclick="selectSchedTag('${t}')"
+        style="background:${bg};color:${fg};opacity:${isSelected?'1':'0.4'};
+               outline:${isSelected?'2px solid '+bg:'none'};outline-offset:2px;
+               cursor:pointer;transition:all 0.15s;">${t}${isSelected?' ✓':''}</span>`;
     }).join('');
   }
 
   function selectSchedTag(tag) {
-    selectedSchedTag = selectedSchedTag === tag ? null : tag;
-    selectedSchedContact = null;
-    document.getElementById('sched-contact-pills').innerHTML = '';
+    // Toggle tag in/out of selection set
+    if (selectedSchedTags.has(tag)) selectedSchedTags.delete(tag);
+    else selectedSchedTags.add(tag);
+    // Clear contact selection when tags are active
+    if (selectedSchedTags.size > 0) {
+      selectedSchedContact = null;
+      clearSchedContactPill();
+    }
     renderSchedTagPills();
+    updateSchedSearchBoxState();
+    updateSchedPreview();
+  }
+
+  function updateSchedPreview() {
     const preview = document.getElementById('sched-recipient-preview');
-    if (selectedSchedTag) {
-      const count = getContactsByTag(selectedSchedTag).length;
-      preview.textContent = `Broadcasting to ${count} contact${count!==1?'s':''} tagged "${selectedSchedTag}"`;
+    if (selectedSchedTags.size > 0) {
+      const phones = getPhonesBySelectedTags();
+      const tagList = [...selectedSchedTags].join(', ');
+      preview.textContent = `Broadcasting to ${phones.length} contact${phones.length!==1?'s':''} across: ${tagList}`;
     } else {
       preview.textContent = '';
     }
   }
 
+  function getPhonesBySelectedTags() {
+    const seen = new Set();
+    const phones = [];
+    selectedSchedTags.forEach(tag => {
+      getContactsByTag(tag).forEach(c => {
+        if (!seen.has(c.phone)) { seen.add(c.phone); phones.push(c.phone); }
+      });
+    });
+    return phones;
+  }
+
+  // Dim + italicize search box when tags are active; restore when not
+  function updateSchedSearchBoxState() {
+    const box    = document.getElementById('sched-recipient-box');
+    const input  = document.getElementById('sched-contact-search');
+    const hasTags = selectedSchedTags.size > 0;
+    box.style.opacity    = hasTags ? '0.45' : '1';
+    box.style.pointerEvents = hasTags ? 'none' : '';
+    input.style.fontStyle = hasTags ? 'italic' : 'normal';
+    input.placeholder     = hasTags ? 'Tag selected — or click a tag to deselect' : 'Search contact or type number...';
+    // Pulse animation when tags first selected
+    if (hasTags) {
+      box.classList.remove('tag-active');
+      void box.offsetWidth; // reflow to restart animation
+      box.classList.add('tag-active');
+    } else {
+      box.classList.remove('tag-active');
+    }
+  }
+
   function renderSchedResults() {
-    // If user is typing a phone number (starts with + or digit), hide contact results
+    if (selectedSchedTags.size > 0) return; // tags active — ignore typing
     const val = document.getElementById('sched-contact-search').value.trim();
     const results = document.getElementById('sched-contact-results');
-    selectedSchedTag = null;
-    renderSchedTagPills();
     document.getElementById('sched-recipient-preview').textContent = '';
-
     if (!val) { results.innerHTML = ''; return; }
-
-    const isPhone = /^[+\d]/.test(val);
-    if (isPhone) { results.innerHTML = ''; return; } // typing a number manually — no dropdown
-
     const filtered = contacts.filter(c =>
       c.name.toLowerCase().includes(val.toLowerCase()) || c.phone.includes(val)
     );
-    if (!filtered.length) { results.innerHTML = '<div style="color:var(--muted);font-size:0.8rem;padding:8px 12px;">No contacts found</div>'; return; }
+    if (!filtered.length) { results.innerHTML = ''; return; }
     results.innerHTML = filtered.slice(0, 6).map(c => {
       const tags = (c.tags||[]).map(t => { const [bg,fg]=tagColor(t); return `<span class="tag-pill" style="background:${bg};color:${fg};font-size:0.55rem;padding:2px 6px;">${t}</span>`; }).join('');
       return `<div onclick="selectSchedContact(${c.id})" style="padding:8px 12px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:background 0.15s;" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='transparent'">
-        <div>
-          <div style="font-size:0.85rem;font-weight:500;">${c.name}</div>
-          <div style="font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);">${c.phone}</div>
-        </div>
+        <div><div style="font-size:0.85rem;font-weight:500;">${c.name}</div>
+        <div style="font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);">${c.phone}</div></div>
         <div style="display:flex;gap:3px;flex-wrap:wrap;justify-content:flex-end;">${tags}</div>
       </div>`;
     }).join('');
@@ -1162,19 +1204,28 @@
 
   function selectSchedContact(id) {
     selectedSchedContact = contacts.find(c => c.id === id);
-    selectedSchedTag = null;
+    selectedSchedTags.clear();
     renderSchedTagPills();
+    updateSchedSearchBoxState();
     document.getElementById('sched-contact-search').value = '';
     document.getElementById('sched-contact-results').innerHTML = '';
     document.getElementById('sched-recipient-preview').textContent = '';
     const [bg, fg] = tagColor(selectedSchedContact.name);
     document.getElementById('sched-contact-pills').innerHTML =
       `<span class="tag-pill" style="background:${bg};color:${fg};">${selectedSchedContact.name}<span class="tag-pill-x" onclick="clearSchedContact()">✕</span></span>`;
+    document.getElementById('sched-recipient-box').style.borderColor = 'var(--green)';
+  }
+
+  function clearSchedContactPill() {
+    document.getElementById('sched-contact-pills').innerHTML = '';
+    const box = document.getElementById('sched-recipient-box');
+    if (box) box.style.borderColor = 'var(--border)';
   }
 
   function clearSchedContact() {
     selectedSchedContact = null;
-    document.getElementById('sched-contact-pills').innerHTML = '';
+    clearSchedContactPill();
+    updateSchedSearchBoxState();
   }
 
   // ─── SEND NOW FROM CALENDAR ──────────────────────────────
@@ -1183,9 +1234,9 @@
     if (!message) return showToast('Enter a message first', true);
 
     let phones = [];
-    if (selectedSchedTag) {
-      phones = getContactsByTag(selectedSchedTag).map(c => c.phone);
-      if (!phones.length) return showToast(`No contacts with tag "${selectedSchedTag}"`, true);
+    if (selectedSchedTags.size > 0) {
+      phones = getPhonesBySelectedTags();
+      if (!phones.length) return showToast('No contacts found for selected tags', true);
     } else if (selectedSchedContact) {
       phones = [selectedSchedContact.phone];
     } else {
@@ -1195,10 +1246,7 @@
     }
 
     const endpoint = phones.length > 1 ? '/api/send_bulk' : '/api/send';
-    const body = phones.length > 1
-      ? { phones, message }
-      : { phone: phones[0], message };
-
+    const body = phones.length > 1 ? { phones, message } : { phone: phones[0], message };
     const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
     if (data.success) {
@@ -1216,9 +1264,9 @@
     let phones = [];
     let label = '';
 
-    if (selectedSchedTag) {
-      phones = getContactsByTag(selectedSchedTag).map(c => c.phone);
-      if (!phones.length) return showToast(`No contacts with tag "${selectedSchedTag}"`, true);
+    if (selectedSchedTags.size > 0) {
+      phones = getPhonesBySelectedTags();
+      if (!phones.length) return showToast('No contacts found for selected tags', true);
       label = `Scheduled for ${phones.length} contacts`;
     } else if (selectedSchedContact) {
       phones = [selectedSchedContact.phone];
@@ -1239,9 +1287,10 @@
       document.getElementById('sched-contact-search').value = '';
       document.getElementById('sched-contact-results').innerHTML = '';
       selectedSchedContact = null;
-      selectedSchedTag = null;
-      document.getElementById('sched-contact-pills').innerHTML = '';
+      selectedSchedTags.clear();
+      clearSchedContactPill();
       renderSchedTagPills();
+      updateSchedSearchBoxState();
       document.getElementById('sched-recipient-preview').textContent = '';
       loadJobs();
     } else showToast(data.error || 'Failed to schedule', true);
