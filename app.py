@@ -35,6 +35,15 @@ def init_log_db():
         phone     TEXT NOT NULL UNIQUE,
         tags      TEXT NOT NULL DEFAULT ''
     )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS calendar_events (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        key       TEXT NOT NULL UNIQUE,
+        name      TEXT NOT NULL,
+        emoji     TEXT NOT NULL DEFAULT '📅'
+    )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS disabled_holidays (
+        key       TEXT PRIMARY KEY
+    )""")
     con.commit()
     con.close()
 
@@ -169,6 +178,100 @@ def delete_job(job_id):
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 404
+
+
+@app.route('/api/jobs/<job_id>', methods=['PUT'])
+def edit_job(job_id):
+    data = request.json
+    phone   = data.get('phone')
+    message = data.get('message')
+    send_at = data.get('send_at')
+    repeat  = data.get('repeat', 'none')
+
+    if not phone or not message or not send_at:
+        return jsonify({"error": "phone, message and send_at required"}), 400
+    if len(send_at) == 16:
+        send_at += ':00'
+
+    try:
+        scheduler.remove_job(job_id)
+    except:
+        pass
+
+    run_date = datetime.fromisoformat(send_at).replace(tzinfo=pytz.utc)
+    source = 'scheduled' if repeat == 'none' else f'recurring:{repeat}'
+    try:
+        if repeat == 'daily':
+            scheduler.add_job(send_whatsapp_message, 'cron',
+                hour=run_date.hour, minute=run_date.minute,
+                args=[phone, message, source], id=job_id, replace_existing=True)
+        elif repeat == 'weekly':
+            scheduler.add_job(send_whatsapp_message, 'cron',
+                day_of_week=run_date.strftime('%a').lower(),
+                hour=run_date.hour, minute=run_date.minute,
+                args=[phone, message, source], id=job_id, replace_existing=True)
+        elif repeat == 'yearly':
+            scheduler.add_job(send_whatsapp_message, 'cron',
+                month=run_date.month, day=run_date.day,
+                hour=run_date.hour, minute=run_date.minute,
+                args=[phone, message, source], id=job_id, replace_existing=True)
+        else:
+            scheduler.add_job(send_whatsapp_message, 'date',
+                run_date=run_date, args=[phone, message, source], id=job_id)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── CALENDAR EVENTS ─────────────────────────────────────────
+@app.route('/api/calendar/events', methods=['GET'])
+def get_calendar_events():
+    con = sqlite3.connect(DB_PATH)
+    events = [{'id': r[0], 'key': r[1], 'name': r[2], 'emoji': r[3]}
+              for r in con.execute('SELECT id, key, name, emoji FROM calendar_events').fetchall()]
+    con.close()
+    return jsonify(events)
+
+@app.route('/api/calendar/events', methods=['POST'])
+def add_calendar_event():
+    data = request.json
+    key, name, emoji = data.get('key'), data.get('name'), data.get('emoji', '📅')
+    if not key or not name:
+        return jsonify({'error': 'key and name required'}), 400
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute('INSERT INTO calendar_events (key, name, emoji) VALUES (?, ?, ?)', (key, name, emoji))
+        con.commit()
+        con.close()
+        return jsonify({'success': True})
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Event already exists for that date'}), 409
+
+@app.route('/api/calendar/events/<int:event_id>', methods=['DELETE'])
+def delete_calendar_event(event_id):
+    con = sqlite3.connect(DB_PATH)
+    con.execute('DELETE FROM calendar_events WHERE id = ?', (event_id,))
+    con.commit()
+    con.close()
+    return jsonify({'success': True})
+
+@app.route('/api/calendar/holidays/disabled', methods=['GET'])
+def get_disabled_holidays():
+    con = sqlite3.connect(DB_PATH)
+    keys = [r[0] for r in con.execute('SELECT key FROM disabled_holidays').fetchall()]
+    con.close()
+    return jsonify(keys)
+
+@app.route('/api/calendar/holidays/disabled', methods=['POST'])
+def set_disabled_holidays():
+    keys = request.json.get('keys', [])
+    con = sqlite3.connect(DB_PATH)
+    con.execute('DELETE FROM disabled_holidays')
+    for k in keys:
+        con.execute('INSERT OR IGNORE INTO disabled_holidays (key) VALUES (?)', (k,))
+    con.commit()
+    con.close()
+    return jsonify({'success': True})
 
 
 @app.route('/api/logs')
