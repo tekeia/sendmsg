@@ -1078,7 +1078,10 @@
     switchTab('calendar');
     const contact = contacts.find(c => c.phone === phone);
     if (contact) {
-      selectSchedContact(contact.id);
+      selectedSchedContacts.set(contact.id, contact);
+      selectedSchedTags.clear();
+      renderSchedTagPills();
+      renderSchedContactPills();
     } else {
       document.getElementById('sched-contact-search').value = phone;
     }
@@ -1218,9 +1221,9 @@
 
   // ─── SCHEDULE RECIPIENT ──────────────────────────────────
   // selectedSchedTags: Set of tag strings (multi-select)
-  // selectedSchedContact: single contact object or null
-  let selectedSchedContact = null;
-  let selectedSchedTags    = new Set();
+  // selectedSchedContacts: Map of id -> contact (multi-select)
+  let selectedSchedContacts = new Map();
+  let selectedSchedTags     = new Set();
 
   function renderSchedTagPills() {
     const tags = getAllTags();
@@ -1243,7 +1246,7 @@
     else selectedSchedTags.add(tag);
     // Clear contact selection when tags are active
     if (selectedSchedTags.size > 0) {
-      selectedSchedContact = null;
+      selectedSchedContacts.clear();
       clearSchedContactPill();
     }
     renderSchedTagPills();
@@ -1313,27 +1316,51 @@
   }
 
   function selectSchedContact(id) {
-    selectedSchedContact = contacts.find(c => c.id === id);
-    selectedSchedTags.clear();
-    renderSchedTagPills();
-    updateSchedSearchBoxState();
+    const contact = contacts.find(c => c.id === id);
+    if (!contact) return;
+    // Toggle: if already selected, remove it
+    if (selectedSchedContacts.has(id)) {
+      selectedSchedContacts.delete(id);
+    } else {
+      selectedSchedContacts.set(id, contact);
+      selectedSchedTags.clear();
+      renderSchedTagPills();
+      updateSchedSearchBoxState();
+    }
     document.getElementById('sched-contact-search').value = '';
     document.getElementById('sched-contact-results').innerHTML = '';
-    document.getElementById('sched-recipient-preview').textContent = '';
-    const [bg, fg] = tagColor(selectedSchedContact.name);
-    document.getElementById('sched-contact-pills').innerHTML =
-      `<span class="tag-pill" style="background:${bg};color:${fg};">${selectedSchedContact.name}<span class="tag-pill-x" onclick="clearSchedContact()">✕</span></span>`;
-    document.getElementById('sched-recipient-box').style.borderColor = 'var(--green)';
+    renderSchedContactPills();
+  }
+
+  function renderSchedContactPills() {
+    const pillsEl = document.getElementById('sched-contact-pills');
+    const box = document.getElementById('sched-recipient-box');
+    if (!selectedSchedContacts.size) {
+      pillsEl.innerHTML = '';
+      if (box) box.style.borderColor = 'var(--border)';
+      return;
+    }
+    pillsEl.innerHTML = [...selectedSchedContacts.values()].map(c => {
+      const [bg, fg] = tagColor(c.name);
+      return `<span class="tag-pill" style="background:${bg};color:${fg};">${c.name}<span class="tag-pill-x" onclick="removeSchedContact(${c.id})">✕</span></span>`;
+    }).join('');
+    if (box) box.style.borderColor = 'var(--green)';
+  }
+
+  function removeSchedContact(id) {
+    selectedSchedContacts.delete(id);
+    renderSchedContactPills();
+    if (!selectedSchedContacts.size) updateSchedSearchBoxState();
   }
 
   function clearSchedContactPill() {
+    selectedSchedContacts.clear();
     document.getElementById('sched-contact-pills').innerHTML = '';
     const box = document.getElementById('sched-recipient-box');
     if (box) box.style.borderColor = 'var(--border)';
   }
 
   function clearSchedContact() {
-    selectedSchedContact = null;
     clearSchedContactPill();
     updateSchedSearchBoxState();
   }
@@ -1347,12 +1374,12 @@
     if (selectedSchedTags.size > 0) {
       phones = getPhonesBySelectedTags();
       if (!phones.length) return showToast('No contacts found for selected tags', true);
-    } else if (selectedSchedContact) {
-      phones = [selectedSchedContact.phone];
+    } else if (selectedSchedContacts.size > 0) {
+      phones = [...selectedSchedContacts.values()].map(c => c.phone);
     } else {
       const raw = document.getElementById('sched-contact-search').value.trim();
       if (!raw) return showToast('Select a recipient first', true);
-      phones = [raw];
+      phones = [normalizePhone(raw)];
     }
 
     const endpoint = phones.length > 1 ? '/api/send_bulk' : '/api/send';
@@ -1381,9 +1408,9 @@
       phones = getPhonesBySelectedTags();
       if (!phones.length) return showToast('No contacts found for selected tags', true);
       label = `Scheduled for ${phones.length} contacts`;
-    } else if (selectedSchedContact) {
-      phones = [selectedSchedContact.phone];
-      label = 'Message scheduled!';
+    } else if (selectedSchedContacts.size > 0) {
+      phones = [...selectedSchedContacts.values()].map(c => c.phone);
+      label = selectedSchedContacts.size > 1 ? `Scheduled for ${phones.length} contacts` : 'Message scheduled!';
     } else {
       const typed = document.getElementById('sched-contact-search').value.trim();
       if (!typed) return showToast('Select a contact, tag, or type a phone number', true);
@@ -1399,7 +1426,7 @@
       document.getElementById('sched-msg').value = '';
       document.getElementById('sched-contact-search').value = '';
       document.getElementById('sched-contact-results').innerHTML = '';
-      selectedSchedContact = null;
+      selectedSchedContacts.clear();
       selectedSchedTags.clear();
       clearSchedContactPill();
       renderSchedTagPills();
