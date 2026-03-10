@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>WPP Automator</title>
+  <title>WPP Dispatcher</title>
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <style>
     :root { --bg:#0d0d0d;--surface:#161616;--surface2:#1f1f1f;--border:#2a2a2a;--green:#25d366;--text:#e8e8e8;--muted:#666;--danger:#e05555; }
@@ -67,6 +67,16 @@
     .broadcast-box{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-top:16px;}
     .broadcast-box h3{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:10px;}
     .selected-tag-info{font-size:0.8rem;color:var(--muted);margin-bottom:10px;}
+
+    /* QUICK TIME BUTTONS */
+    .quick-time-btn{flex:1;min-width:60px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-family:'Space Mono',monospace;font-size:0.62rem;padding:6px 4px;border-radius:6px;cursor:pointer;text-align:center;transition:all 0.2s;font-weight:700;letter-spacing:0.5px;}
+    .quick-time-btn:hover{border-color:var(--green);color:var(--text);}
+    .quick-time-btn.active{background:var(--green);color:#000;border-color:var(--green);}
+
+
+    .qt-urgent{border-color:#3d1a1a;color:#e05555;}
+    .qt-urgent:hover{border-color:#e05555;background:#3d1a1a;}
+    .qt-urgent.active{background:#e05555 !important;color:#fff !important;border-color:#e05555 !important;}
 
     /* REPEAT OPTIONS */
     .repeat-options{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;}
@@ -153,7 +163,7 @@
 <body>
 
 <header>
-  <div class="logo">WPP_Automator</div>
+  <div class="logo">WPP_Dispatcher</div>
   <div class="status-badge">
     <div class="dot" id="status-dot"></div>
     <span id="status-text">Checking...</span>
@@ -161,14 +171,18 @@
 </header>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('quick')">Quick Send</div>
-  <div class="tab" onclick="switchTab('calendar')">Calendar</div>
+  <div class="tab active" onclick="switchTab('calendar')">Dispatch</div>
   <div class="tab" onclick="switchTab('contacts')">Contacts</div>
   <div class="tab" onclick="switchTab('log')">Log</div>
 </div>
 
 <!-- ===== QUICK MENU ===== -->
-<div class="panel active" id="panel-quick">
+<!-- =====================================================
+     QUICK SEND TAB
+     Send a message immediately to a contact or tag group.
+     Uses: sendNow(), setQSMode(), updateQSTagPreview()
+     ===================================================== -->
+<div class="panel" id="panel-quick">
   <div class="container">
     <div class="qr-banner" id="qr-banner">
       <div class="qr-icon">📱</div>
@@ -221,7 +235,7 @@
 </div>
 
 <!-- ===== CALENDAR ===== -->
-<div class="panel" id="panel-calendar">
+<div class="panel active" id="panel-calendar">
   <div class="container">
     <div class="cal-layout">
       <div class="full-cal">
@@ -240,28 +254,43 @@
         <div class="card">
           <h2>Schedule Message</h2>
           <div class="selected-date-label" id="selected-date-label">No date selected</div>
-          <label>Select Contact</label>
-          <select id="sched-contact" onchange="fillPhone('sched-contact','sched-phone')">
-            <option value="">-- Select a contact --</option>
-          </select>
-          <label>Or Send to Tag (broadcasts to all)</label>
-          <select id="sched-tag" onchange="clearSchedPhone()">
-            <option value="">-- Select a tag --</option>
-          </select>
-          <label>Or Enter Phone Manually</label>
-          <input type="text" id="sched-phone" placeholder="+1 555 000 0000"/>
-          <label>Message</label>
+
+          <label>Send To</label>
+          <div id="sched-tag-pills" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;min-height:0;"></div>
+          <div id="sched-recipient-box" onclick="document.getElementById('sched-contact-search').focus()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:text;transition:border-color 0.2s;">
+            <div id="sched-contact-pills" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;min-height:0;"></div>
+            <input type="text" id="sched-contact-search"
+              placeholder="Search contact or type number..."
+              oninput="renderSchedResults()"
+              autocomplete="off"
+              style="background:transparent;border:none;outline:none;width:100%;color:var(--text);font-family:'DM Sans',sans-serif;font-size:0.88rem;padding:2px 0;"/>
+          </div>
+          <div id="sched-contact-results" style="max-height:150px;overflow-y:auto;margin-top:3px;border-radius:8px;"></div>
+          <div id="sched-recipient-preview" style="font-size:0.72rem;color:var(--muted);margin-top:4px;min-height:16px;"></div>
+
+          <label style="margin-top:16px;">Message</label>
           <textarea id="sched-msg" placeholder="Type your message..."></textarea>
-          <label>Date & Time</label>
-          <input type="datetime-local" id="sched-time"/>
-          <label>Repeat</label>
+
+          <label style="margin-top:16px;">Date & Time</label>
+          <input type="datetime-local" id="sched-time" oninput="clearQuickTime()"/>
+          <div style="display:flex;gap:5px;margin-top:6px;">
+            <button class="quick-time-btn" id="qt-today" onclick="setQuickTime('today')">Today</button>
+            <button class="quick-time-btn" id="qt-tomorrow" onclick="setQuickTime('tomorrow')">Tomorrow</button>
+            <button class="quick-time-btn qt-urgent" id="qt-15" onclick="setQuickTime(15)">+15 min</button>
+          </div>
+
+          <label style="margin-top:16px;">Repeat</label>
           <div class="repeat-options">
             <button class="repeat-btn active" id="rep-none" onclick="setRepeat('none')">Once</button>
             <button class="repeat-btn" id="rep-daily" onclick="setRepeat('daily')">Daily</button>
             <button class="repeat-btn" id="rep-weekly" onclick="setRepeat('weekly')">Weekly</button>
             <button class="repeat-btn" id="rep-yearly" onclick="setRepeat('yearly')">Yearly</button>
           </div>
-          <button class="btn btn-outline" onclick="scheduleMsg()">SCHEDULE</button>
+
+          <div style="display:flex;gap:8px;margin-top:20px;align-items:stretch;">
+            <button class="btn btn-outline" style="margin:0;flex:1;" onclick="scheduleMsg()">SCHEDULE</button>
+            <button class="btn btn-green" style="margin:0;width:auto;padding:11px 18px;font-size:0.72rem;" onclick="sendNowFromCalendar()" title="Send immediately">SEND NOW</button>
+          </div>
         </div>
         <div class="card">
           <h2 id="day-jobs-title">Selected Day</h2>
@@ -432,11 +461,11 @@
 
   // ─── TABS ────────────────────────────────────────────────
   function switchTab(name) {
-    ['quick','calendar','contacts','log'].forEach((t, i) => {
+    ['calendar','contacts','log'].forEach((t, i) => {
       document.querySelectorAll('.tab')[i].classList.toggle('active', t === name);
       document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
     });
-    if (name === 'calendar') { renderFullCal(); loadJobs(); }
+    if (name === 'calendar') { renderFullCal(); loadJobs(); renderSchedTagPills(); }
     if (name === 'contacts') { renderContactTable(); renderTagFilters(); }
     if (name === 'log') loadLogs();
   }
@@ -574,21 +603,20 @@
       sel.value = prev;
     });
 
-    // Update all tag dropdowns
+    // Update send-tag dropdown in Quick Send
     const tags = getAllTags();
     const tagOpts = '<option value="">-- Select a tag --</option>' +
       tags.map(t => `<option value="${t}">${t} (${getContactsByTag(t).length})</option>`).join('');
-    ['send-tag', 'sched-tag'].forEach(id => {
-      const sel = document.getElementById(id);
-      if (!sel) return;
-      const prev = sel.value;
-      sel.innerHTML = tagOpts;
-      sel.value = prev;
-    });
-
-    // Add onchange to send-tag for preview
     const sendTag = document.getElementById('send-tag');
-    if (sendTag) sendTag.onchange = updateQSTagPreview;
+    if (sendTag) {
+      const prev = sendTag.value;
+      sendTag.innerHTML = tagOpts;
+      sendTag.value = prev;
+      sendTag.onchange = updateQSTagPreview;
+    }
+
+    // Refresh calendar tag pills
+    renderSchedTagPills();
   }
 
   function renderContactTable() {
@@ -700,12 +728,7 @@
 
   function fillPhone(selectId, inputId) {
     const val = document.getElementById(selectId).value;
-    if (val) { document.getElementById(inputId).value = val; document.getElementById('sched-tag').value = ''; }
-  }
-
-  function clearSchedPhone() {
-    const tag = document.getElementById('sched-tag').value;
-    if (tag) { document.getElementById('sched-phone').value = ''; document.getElementById('sched-contact').value = ''; }
+    if (val) document.getElementById(inputId).value = val;
   }
 
   function quickSendTo(phone) {
@@ -736,7 +759,13 @@
     });
   }
 
-  // ─── QUICK SEND MODE ─────────────────────────────────────
+  // ╔═══════════════════════════════════════════════════════╗
+  // ║  QUICK SEND TAB — Mode toggle (Contact / Tag)         ║
+  // ║  setQSMode()        : switches between contact/tag    ║
+  // ║  updateQSTagPreview(): shows recipients for tag       ║
+  // ║  sendNow()          : fires the immediate send        ║
+  // ╚═══════════════════════════════════════════════════════╝
+
   let qsMode = 'contact';
 
   function setQSMode(mode) {
@@ -759,12 +788,13 @@
       matched.map(c => `<span class="tag" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">${c.name}</span>`).join('');
   }
 
-  // ─── SEND NOW ────────────────────────────────────────────
+  // ─── sendNow: fires immediately from Quick Send tab ──────
   async function sendNow() {
     const message = document.getElementById('send-msg').value.trim();
     if (!message) return showToast('Enter a message', true);
 
     if (qsMode === 'tag') {
+      // Tag broadcast — send to all contacts with selected tag
       const tag = document.getElementById('send-tag').value;
       if (!tag) return showToast('Select a tag', true);
       const phones = getContactsByTag(tag).map(c => c.phone);
@@ -774,6 +804,7 @@
       if (data.success) { showToast(`Sent to ${data.sent} contacts!`); document.getElementById('send-msg').value = ''; }
       else showToast(data.error || 'Failed', true);
     } else {
+      // Single contact or manual phone number
       const phone = document.getElementById('send-phone').value.trim();
       if (!phone) return showToast('Select a contact or enter a phone', true);
       const res = await fetch('/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, message }) });
@@ -783,28 +814,188 @@
     }
   }
 
+  // ─── QUICK TIME ───────────────────────────────────────────
+  let activeQuickTime = null;
+
+  function setQuickTime(val) {
+    const pad = n => String(n).padStart(2, '0');
+    const now = new Date();
+
+    if (val === 15) {
+      now.setMinutes(now.getMinutes() + 15);
+      // also highlight today
+      setQTActive(['15','today']);
+    } else if (val === 'today') {
+      now.setHours(now.getHours() + 1, 0, 0, 0);
+      setQTActive(['today']);
+    } else if (val === 'tomorrow') {
+      now.setDate(now.getDate() + 1);
+      now.setHours(9, 0, 0, 0);
+      setQTActive(['tomorrow']);
+    }
+
+    const formatted = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    document.getElementById('sched-time').value = formatted;
+
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    document.getElementById('selected-date-label').textContent = `${MONTHS[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
+  }
+
+  function setQTActive(ids) {
+    ['15','today','tomorrow'].forEach(id => {
+      const btn = document.getElementById(`qt-${id}`);
+      if (btn) btn.classList.toggle('active', ids.includes(id));
+    });
+  }
+
+  function clearQuickTime() {
+    ['15','today','tomorrow'].forEach(id => {
+      const btn = document.getElementById(`qt-${id}`);
+      if (btn) btn.classList.remove('active');
+    });
+  }
+
+  // ─── SCHEDULE RECIPIENT ──────────────────────────────────
+  let selectedSchedContact = null;
+  let selectedSchedTag = null;
+
+  function renderSchedTagPills() {
+    const tags = getAllTags();
+    const container = document.getElementById('sched-tag-pills');
+    if (!tags.length) { container.innerHTML = ''; return; }
+    container.innerHTML = tags.map(t => {
+      const [bg, fg] = tagColor(t);
+      const isSelected = selectedSchedTag === t;
+      return `<span class="tag-pill" onclick="selectSchedTag('${t}')" style="background:${bg};color:${fg};opacity:${isSelected?'1':'0.45'};outline:${isSelected?'2px solid '+bg:'none'};outline-offset:2px;cursor:pointer;transition:all 0.15s;">${t}${isSelected?' ✓':''}</span>`;
+    }).join('');
+  }
+
+  function selectSchedTag(tag) {
+    selectedSchedTag = selectedSchedTag === tag ? null : tag;
+    selectedSchedContact = null;
+    document.getElementById('sched-contact-pills').innerHTML = '';
+    renderSchedTagPills();
+    const preview = document.getElementById('sched-recipient-preview');
+    if (selectedSchedTag) {
+      const count = getContactsByTag(selectedSchedTag).length;
+      preview.textContent = `Broadcasting to ${count} contact${count!==1?'s':''} tagged "${selectedSchedTag}"`;
+    } else {
+      preview.textContent = '';
+    }
+  }
+
+  function renderSchedResults() {
+    // If user is typing a phone number (starts with + or digit), hide contact results
+    const val = document.getElementById('sched-contact-search').value.trim();
+    const results = document.getElementById('sched-contact-results');
+    selectedSchedTag = null;
+    renderSchedTagPills();
+    document.getElementById('sched-recipient-preview').textContent = '';
+
+    if (!val) { results.innerHTML = ''; return; }
+
+    const isPhone = /^[+\d]/.test(val);
+    if (isPhone) { results.innerHTML = ''; return; } // typing a number manually — no dropdown
+
+    const filtered = contacts.filter(c =>
+      c.name.toLowerCase().includes(val.toLowerCase()) || c.phone.includes(val)
+    );
+    if (!filtered.length) { results.innerHTML = '<div style="color:var(--muted);font-size:0.8rem;padding:8px 12px;">No contacts found</div>'; return; }
+    results.innerHTML = filtered.slice(0, 6).map(c => {
+      const tags = (c.tags||[]).map(t => { const [bg,fg]=tagColor(t); return `<span class="tag-pill" style="background:${bg};color:${fg};font-size:0.55rem;padding:2px 6px;">${t}</span>`; }).join('');
+      return `<div onclick="selectSchedContact(${c.id})" style="padding:8px 12px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:background 0.15s;" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='transparent'">
+        <div>
+          <div style="font-size:0.85rem;font-weight:500;">${c.name}</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);">${c.phone}</div>
+        </div>
+        <div style="display:flex;gap:3px;flex-wrap:wrap;justify-content:flex-end;">${tags}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function selectSchedContact(id) {
+    selectedSchedContact = contacts.find(c => c.id === id);
+    selectedSchedTag = null;
+    renderSchedTagPills();
+    document.getElementById('sched-contact-search').value = '';
+    document.getElementById('sched-contact-results').innerHTML = '';
+    document.getElementById('sched-recipient-preview').textContent = '';
+    const [bg, fg] = tagColor(selectedSchedContact.name);
+    document.getElementById('sched-contact-pills').innerHTML =
+      `<span class="tag-pill" style="background:${bg};color:${fg};">${selectedSchedContact.name}<span class="tag-pill-x" onclick="clearSchedContact()">✕</span></span>`;
+  }
+
+  function clearSchedContact() {
+    selectedSchedContact = null;
+    document.getElementById('sched-contact-pills').innerHTML = '';
+  }
+
+  // ─── SEND NOW FROM CALENDAR ──────────────────────────────
+  async function sendNowFromCalendar() {
+    const message = document.getElementById('sched-msg').value.trim();
+    if (!message) return showToast('Enter a message first', true);
+
+    let phones = [];
+    if (selectedSchedTag) {
+      phones = getContactsByTag(selectedSchedTag).map(c => c.phone);
+      if (!phones.length) return showToast(`No contacts with tag "${selectedSchedTag}"`, true);
+    } else if (selectedSchedContact) {
+      phones = [selectedSchedContact.phone];
+    } else {
+      const raw = document.getElementById('sched-contact-search').value.trim();
+      if (!raw) return showToast('Select a recipient first', true);
+      phones = [raw];
+    }
+
+    const endpoint = phones.length > 1 ? '/api/send_bulk' : '/api/send';
+    const body = phones.length > 1
+      ? { phones, message }
+      : { phone: phones[0], message };
+
+    const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (data.success) {
+      showToast(phones.length > 1 ? `Sent to ${phones.length} contacts!` : 'Message sent!');
+      document.getElementById('sched-msg').value = '';
+    } else showToast(data.error || 'Failed to send', true);
+  }
+
   // ─── SCHEDULE ────────────────────────────────────────────
   async function scheduleMsg() {
-    const tag = document.getElementById('sched-tag').value;
-    let phones = [];
-    if (tag) {
-      phones = getContactsByTag(tag).map(c => c.phone);
-      if (!phones.length) return showToast(`No contacts with tag "${tag}"`, true);
-    } else {
-      const phone = document.getElementById('sched-phone').value.trim();
-      if (!phone) return showToast('Select a contact, tag, or enter a phone', true);
-      phones = [phone];
-    }
     const message = document.getElementById('sched-msg').value.trim();
     const localTime = document.getElementById('sched-time').value;
     if (!message || !localTime) return showToast('Fill in message and time', true);
+
+    let phones = [];
+    let label = '';
+
+    if (selectedSchedTag) {
+      phones = getContactsByTag(selectedSchedTag).map(c => c.phone);
+      if (!phones.length) return showToast(`No contacts with tag "${selectedSchedTag}"`, true);
+      label = `Scheduled for ${phones.length} contacts`;
+    } else if (selectedSchedContact) {
+      phones = [selectedSchedContact.phone];
+      label = 'Message scheduled!';
+    } else {
+      const typed = document.getElementById('sched-contact-search').value.trim();
+      if (!typed) return showToast('Select a contact, tag, or type a phone number', true);
+      phones = [typed];
+      label = 'Message scheduled!';
+    }
+
     const send_at = new Date(localTime).toISOString().slice(0, 19);
     const res = await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phones, message, send_at, repeat: selectedRepeat }) });
     const data = await res.json();
     if (data.success) {
-      const label = tag ? `Scheduled for ${phones.length} contacts` : 'Message scheduled!';
       showToast(label);
       document.getElementById('sched-msg').value = '';
+      document.getElementById('sched-contact-search').value = '';
+      document.getElementById('sched-contact-results').innerHTML = '';
+      selectedSchedContact = null;
+      selectedSchedTag = null;
+      document.getElementById('sched-contact-pills').innerHTML = '';
+      renderSchedTagPills();
+      document.getElementById('sched-recipient-preview').textContent = '';
       loadJobs();
     } else showToast(data.error || 'Failed to schedule', true);
   }
