@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from datetime import datetime
+import sqlite3
 import pytz
 import requests
 import uuid
@@ -10,18 +11,50 @@ import os
 app = Flask(__name__)
 
 WHATSAPP_BRIDGE = "http://localhost:3001"
+DB_PATH = "messages.db"
 
 jobstores = {'default': SQLAlchemyJobStore(url='sqlite:///jobs.db')}
 scheduler = BackgroundScheduler(jobstores=jobstores, job_defaults={'misfire_grace_time': 60}, timezone=pytz.utc)
 scheduler.start()
 
 
-def send_whatsapp_message(phone, message):
+# ── MESSAGE LOG DB ──────────────────────────────────────────
+def init_log_db():
+    con = sqlite3.connect(DB_PATH)
+    con.execute("""CREATE TABLE IF NOT EXISTS message_log (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone     TEXT NOT NULL,
+        message   TEXT NOT NULL,
+        status    TEXT NOT NULL DEFAULT 'sent',
+        source    TEXT NOT NULL DEFAULT 'manual',
+        sent_at   TEXT NOT NULL
+    )""")
+    con.commit()
+    con.close()
+
+def log_message(phone, message, status='sent', source='manual'):
+    con = sqlite3.connect(DB_PATH)
+    con.execute(
+        "INSERT INTO message_log (phone, message, status, source, sent_at) VALUES (?, ?, ?, ?, ?)",
+        (phone, message, status, source, datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S'))
+    )
+    con.commit()
+    con.close()
+
+init_log_db()
+
+
+# ── WHATSAPP SEND ────────────────────────────────────────────
+def send_whatsapp_message(phone, message, source='scheduled'):
     try:
         res = requests.post(f"{WHATSAPP_BRIDGE}/send", json={"phone": phone, "message": message})
-        print(f"[{datetime.now()}] Sent to {phone}: {res.json()}")
+        data = res.json()
+        status = 'sent' if data.get('success') else 'failed'
+        print(f"[{datetime.now()}] Sent to {phone}: {data}")
     except Exception as e:
-        print(f"Error sending message: {e}")
+        status = 'failed'
+        print(f"Error sending message to {phone}: {e}")
+    log_message(phone, message, status=status, source=source)
 
 
 @app.route('/')
@@ -45,7 +78,7 @@ def send_now():
     message = data.get('message')
     if not phone or not message:
         return jsonify({"error": "phone and message required"}), 400
-    send_whatsapp_message(phone, message)
+    send_whatsapp_message(phone, message, source='manual')
     return jsonify({"success": True})
 
 
@@ -57,7 +90,7 @@ def send_bulk():
     if not phones or not message:
         return jsonify({"error": "phones and message required"}), 400
     for phone in phones:
-        send_whatsapp_message(phone, message)
+        send_whatsapp_message(phone, message, source='broadcast')
     return jsonify({"success": True, "sent": len(phones)})
 
 
@@ -67,11 +100,10 @@ def schedule_message():
     phones = data.get('phones') or ([data.get('phone')] if data.get('phone') else [])
     message = data.get('message')
     send_at = data.get('send_at')
-    repeat = data.get('repeat', 'none')  # none | daily | weekly | yearly
+    repeat = data.get('repeat', 'none')
 
     if not phones or not message or not send_at:
         return jsonify({"error": "phones, message and send_at required"}), 400
-
     if len(send_at) == 16:
         send_at += ':00'
 
@@ -81,35 +113,24 @@ def schedule_message():
     try:
         for phone in phones:
             job_id = str(uuid.uuid4())
+            source = 'scheduled' if repeat == 'none' else f'recurring:{repeat}'
             if repeat == 'daily':
-                scheduler.add_job(
-                    send_whatsapp_message, 'cron',
+                scheduler.add_job(send_whatsapp_message, 'cron',
                     hour=run_date.hour, minute=run_date.minute,
-                    args=[phone, message], id=job_id,
-                    replace_existing=True
-                )
+                    args=[phone, message, source], id=job_id, replace_existing=True)
             elif repeat == 'weekly':
-                scheduler.add_job(
-                    send_whatsapp_message, 'cron',
+                scheduler.add_job(send_whatsapp_message, 'cron',
                     day_of_week=run_date.strftime('%a').lower(),
                     hour=run_date.hour, minute=run_date.minute,
-                    args=[phone, message], id=job_id,
-                    replace_existing=True
-                )
+                    args=[phone, message, source], id=job_id, replace_existing=True)
             elif repeat == 'yearly':
-                scheduler.add_job(
-                    send_whatsapp_message, 'cron',
+                scheduler.add_job(send_whatsapp_message, 'cron',
                     month=run_date.month, day=run_date.day,
                     hour=run_date.hour, minute=run_date.minute,
-                    args=[phone, message], id=job_id,
-                    replace_existing=True
-                )
+                    args=[phone, message, source], id=job_id, replace_existing=True)
             else:
-                scheduler.add_job(
-                    send_whatsapp_message, 'date',
-                    run_date=run_date,
-                    args=[phone, message], id=job_id
-                )
+                scheduler.add_job(send_whatsapp_message, 'date',
+                    run_date=run_date, args=[phone, message, source], id=job_id)
             job_ids.append(job_id)
 
         return jsonify({"success": True, "job_ids": job_ids, "scheduled_at": send_at, "repeat": repeat})
@@ -131,12 +152,7 @@ def list_jobs():
                 repeat = 'yearly'
             else:
                 repeat = 'daily'
-        jobs.append({
-            "id": job.id,
-            "next_run": str(job.next_run_time),
-            "args": job.args,
-            "repeat": repeat
-        })
+        jobs.append({"id": job.id, "next_run": str(job.next_run_time), "args": job.args, "repeat": repeat})
     return jsonify(jobs)
 
 
@@ -147,6 +163,42 @@ def delete_job(job_id):
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 404
+
+
+@app.route('/api/logs')
+def get_logs():
+    limit  = int(request.args.get('limit', 100))
+    offset = int(request.args.get('offset', 0))
+    search = request.args.get('search', '')
+    source = request.args.get('source', '')
+
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    query  = "SELECT * FROM message_log WHERE 1=1"
+    params = []
+    if search:
+        query += " AND (phone LIKE ? OR message LIKE ?)"
+        params += [f'%{search}%', f'%{search}%']
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+
+    rows = con.execute(query, params).fetchall()
+    total = con.execute("SELECT COUNT(*) FROM message_log").fetchone()[0]
+    con.close()
+
+    return jsonify({"logs": [dict(r) for r in rows], "total": total})
+
+
+@app.route('/api/logs', methods=['DELETE'])
+def clear_logs():
+    con = sqlite3.connect(DB_PATH)
+    con.execute("DELETE FROM message_log")
+    con.commit()
+    con.close()
+    return jsonify({"success": True})
 
 
 if __name__ == '__main__':
