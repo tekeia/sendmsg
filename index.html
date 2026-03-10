@@ -682,7 +682,7 @@
     if (name === 'log') loadLogs();
     if (name === 'settings') {
       updateSettingsStatus();
-      renderSettingsEvents();
+      fetchCalendarEvents().then(renderSettingsEvents);
       const inp = document.getElementById('settings-delay-input');
       if (inp) inp.value = quickDelayMins;
       document.getElementById('delay-saved-note').textContent = '';
@@ -783,10 +783,12 @@
     }).join('');
     container.innerHTML = allBtn + tagBtns;
 
-    // Update tag dropdown in calendar
+    // Update tag dropdown in calendar (element may not exist)
     const schedTag = document.getElementById('sched-tag');
-    schedTag.innerHTML = '<option value="">-- Select a tag --</option>' +
-      tags.map(t => `<option value="${t}">${t} (${getContactsByTag(t).length})</option>`).join('');
+    if (schedTag) {
+      schedTag.innerHTML = '<option value="">-- Select a tag --</option>' +
+        tags.map(t => `<option value="${t}">${t} (${getContactsByTag(t).length})</option>`).join('');
+    }
   }
 
   function filterByTag(tag) {
@@ -1361,34 +1363,24 @@
     return h;
   }
 
-  // ─── CUSTOM / DISABLED EVENTS (localStorage) ─────────────
-  // disabledHolidays: Set of keys like "3-8" to suppress
-  // customEvents: array of { key:"3-8", name:"...", emoji:"🎉" }
+  // ─── CUSTOM / DISABLED EVENTS (server-side) ─────────────
+  let disabledHolidays = new Set();
+  let customEvents     = [];
 
-  function loadDisabledHolidays() {
-    try { return new Set(JSON.parse(localStorage.getItem('wpp_disabled_holidays') || '[]')); }
-    catch { return new Set(); }
+  async function fetchCalendarEvents() {
+    const [evRes, disRes] = await Promise.all([
+      fetch('/api/calendar/events'),
+      fetch('/api/calendar/holidays/disabled')
+    ]);
+    customEvents     = await evRes.json();
+    const disabledArr = await disRes.json();
+    disabledHolidays = new Set(disabledArr);
   }
-  function saveDisabledHolidays(set) {
-    localStorage.setItem('wpp_disabled_holidays', JSON.stringify([...set]));
-  }
-  function loadCustomEvents() {
-    try { return JSON.parse(localStorage.getItem('wpp_custom_events') || '[]'); }
-    catch { return []; }
-  }
-  function saveCustomEvents(arr) {
-    localStorage.setItem('wpp_custom_events', JSON.stringify(arr));
-  }
-
-  let disabledHolidays = loadDisabledHolidays();
-  let customEvents     = loadCustomEvents();
 
   function getHoliday(year, month, day) {
     const key = `${month}-${day}`;
-    // Custom events take priority
     const custom = customEvents.find(e => e.key === key);
     if (custom) return custom;
-    // Built-in (floating + fixed), filtered by disabled list
     if (disabledHolidays.has(key)) return null;
     const floating = getFloatingHolidays(year);
     return floating[key] || FIXED_HOLIDAYS[key] || null;
@@ -1488,7 +1480,7 @@
           <span class="event-emoji">${e.emoji || '📅'}</span>
           <span class="event-date">${MONTH_NAMES[+m]} ${d}</span>
           <span class="event-name">${e.name}</span>
-          <button class="event-toggle-btn event-delete-btn" onclick="deleteCustomEvent(${i})" title="Remove">✕</button>
+          <button class="event-toggle-btn event-delete-btn" onclick="deleteCustomEvent(${e.id})" title="Remove">✕</button>
         </div>`;
       }).join('');
     } else {
@@ -1496,16 +1488,20 @@
     }
   }
 
-  function toggleHoliday(key) {
+  async function toggleHoliday(key) {
     if (disabledHolidays.has(key)) disabledHolidays.delete(key);
     else disabledHolidays.add(key);
-    saveDisabledHolidays(disabledHolidays);
+    await fetch('/api/calendar/holidays/disabled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [...disabledHolidays] })
+    });
     renderSettingsEvents();
     renderFullCal();
     renderMiniCal();
   }
 
-  function addCustomEvent() {
+  async function addCustomEvent() {
     const month = document.getElementById('ce-month').value;
     const day   = document.getElementById('ce-day').value.trim();
     const name  = document.getElementById('ce-name').value.trim();
@@ -1515,8 +1511,14 @@
     if (d < 1 || d > 31) return showToast('Invalid day', true);
     const key = `${month}-${d}`;
     if (customEvents.find(e => e.key === key)) return showToast('You already have a custom event on that date', true);
-    customEvents.push({ key, name, emoji });
-    saveCustomEvents(customEvents);
+    const res = await fetch('/api/calendar/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, name, emoji })
+    });
+    const data = await res.json();
+    if (!data.success) return showToast(data.error || 'Failed to add event', true);
+    await fetchCalendarEvents();
     document.getElementById('ce-day').value  = '';
     document.getElementById('ce-name').value = '';
     document.getElementById('ce-emoji').value = '';
@@ -1526,9 +1528,9 @@
     showToast(`"${name}" added to calendar`);
   }
 
-  function deleteCustomEvent(index) {
-    customEvents.splice(index, 1);
-    saveCustomEvents(customEvents);
+  async function deleteCustomEvent(id) {
+    await fetch(`/api/calendar/events/${id}`, { method: 'DELETE' });
+    await fetchCalendarEvents();
     renderSettingsEvents();
     renderFullCal();
     renderMiniCal();
@@ -1746,8 +1748,9 @@
 
   // ─── INIT ─────────────────────────────────────────────────
   loadTheme();
-  applyQuickDelay(quickDelayMins); // apply saved delay label
+  applyQuickDelay(quickDelayMins);
   initTagInput();
+  fetchCalendarEvents().then(() => { renderFullCal(); renderMiniCal(); });
   // Attach phone formatting to all phone number inputs
   ['send-phone', 'sched-phone', 'new-phone'].forEach(attachPhoneFormat);
   checkStatus();
