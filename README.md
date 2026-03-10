@@ -1,4 +1,4 @@
-# sendmsg — WhatsApp Automator
+# wpp_dispatcher — WhatsApp Automator
 
 Schedule and send WhatsApp messages from a web dashboard. Runs fully headless on Ubuntu Server — no GUI needed.
 
