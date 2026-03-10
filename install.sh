@@ -1,9 +1,52 @@
 #!/bin/bash
 set -e
 
+# Get the directory where this script lives
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR"
+
 echo "======================================"
 echo "   WPP Automator - Install Script"
 echo "======================================"
+
+# Fix folder structure if files are in root
+echo "[0/6] Setting up folder structure..."
+mkdir -p "$DIR/whatsapp"
+mkdir -p "$DIR/templates"
+
+# Move index.js to whatsapp/ if it's in root
+if [ -f "$DIR/index.js" ] && [ ! -f "$DIR/whatsapp/index.js" ]; then
+    mv "$DIR/index.js" "$DIR/whatsapp/index.js"
+    echo "  Moved index.js -> whatsapp/index.js"
+fi
+
+# Move index.html to templates/ if it's in root
+if [ -f "$DIR/index.html" ] && [ ! -f "$DIR/templates/index.html" ]; then
+    mv "$DIR/index.html" "$DIR/templates/index.html"
+    echo "  Moved index.html -> templates/index.html"
+fi
+
+# Create package.json if missing
+if [ ! -f "$DIR/whatsapp/package.json" ]; then
+    cat > "$DIR/whatsapp/package.json" << 'EOF'
+{
+  "name": "wpp-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp Web bridge",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2"
+  }
+}
+EOF
+    echo "  Created whatsapp/package.json"
+fi
 
 # Update system
 echo "[1/6] Updating system..."
