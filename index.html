@@ -137,7 +137,7 @@
 </header>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('quick')">Quick Menu</div>
+  <div class="tab active" onclick="switchTab('quick')">Quick Send</div>
   <div class="tab" onclick="switchTab('calendar')">Calendar</div>
   <div class="tab" onclick="switchTab('contacts')">Contacts</div>
 </div>
@@ -155,13 +155,27 @@
     </div>
     <div class="quick-grid">
       <div class="card">
-        <h2>Send Now</h2>
-        <label>Select Contact</label>
-        <select id="send-contact" onchange="fillPhone('send-contact','send-phone')">
-          <option value="">-- Select a contact --</option>
-        </select>
-        <label>Or Enter Phone Manually</label>
-        <input type="text" id="send-phone" placeholder="+1 555 000 0000"/>
+        <h2>Quick Send</h2>
+        <label>Send To</label>
+        <div style="display:flex;gap:8px;margin-bottom:4px;">
+          <button class="repeat-btn active" id="qs-mode-contact" onclick="setQSMode('contact')" style="flex:1;">Contact</button>
+          <button class="repeat-btn" id="qs-mode-tag" onclick="setQSMode('tag')" style="flex:1;">Tag (Broadcast)</button>
+        </div>
+        <div id="qs-contact-fields">
+          <label>Select Contact</label>
+          <select id="send-contact" onchange="fillPhone('send-contact','send-phone')">
+            <option value="">-- Select a contact --</option>
+          </select>
+          <label>Or Enter Phone Manually</label>
+          <input type="text" id="send-phone" placeholder="+1 555 000 0000"/>
+        </div>
+        <div id="qs-tag-fields" style="display:none;">
+          <label>Select Tag</label>
+          <select id="send-tag">
+            <option value="">-- Select a tag --</option>
+          </select>
+          <div id="qs-tag-preview" style="margin-top:8px;min-height:24px;"></div>
+        </div>
         <label>Message</label>
         <textarea id="send-msg" placeholder="Type your message..."></textarea>
         <button class="btn btn-green" onclick="sendNow()">SEND MESSAGE</button>
@@ -464,6 +478,22 @@
         contacts.map(c => `<option value="${c.phone}">${c.name} — ${c.phone}</option>`).join('');
       sel.value = prev;
     });
+
+    // Update all tag dropdowns
+    const tags = getAllTags();
+    const tagOpts = '<option value="">-- Select a tag --</option>' +
+      tags.map(t => `<option value="${t}">${t} (${getContactsByTag(t).length})</option>`).join('');
+    ['send-tag', 'sched-tag'].forEach(id => {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      const prev = sel.value;
+      sel.innerHTML = tagOpts;
+      sel.value = prev;
+    });
+
+    // Add onchange to send-tag for preview
+    const sendTag = document.getElementById('send-tag');
+    if (sendTag) sendTag.onchange = updateQSTagPreview;
   }
 
   function renderContactTable() {
@@ -560,15 +590,51 @@
     });
   }
 
+  // ─── QUICK SEND MODE ─────────────────────────────────────
+  let qsMode = 'contact';
+
+  function setQSMode(mode) {
+    qsMode = mode;
+    document.getElementById('qs-mode-contact').classList.toggle('active', mode === 'contact');
+    document.getElementById('qs-mode-tag').classList.toggle('active', mode === 'tag');
+    document.getElementById('qs-contact-fields').style.display = mode === 'contact' ? '' : 'none';
+    document.getElementById('qs-tag-fields').style.display = mode === 'tag' ? '' : 'none';
+    if (mode === 'tag') updateQSTagPreview();
+  }
+
+  function updateQSTagPreview() {
+    const tag = document.getElementById('send-tag')?.value;
+    const preview = document.getElementById('qs-tag-preview');
+    if (!preview) return;
+    if (!tag) { preview.innerHTML = ''; return; }
+    const matched = getContactsByTag(tag);
+    if (!matched.length) { preview.innerHTML = `<span style="font-size:0.78rem;color:var(--muted)">No contacts with this tag</span>`; return; }
+    preview.innerHTML = `<span style="font-size:0.75rem;color:var(--muted);margin-right:6px;">Sending to:</span>` +
+      matched.map(c => `<span class="tag" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">${c.name}</span>`).join('');
+  }
+
   // ─── SEND NOW ────────────────────────────────────────────
   async function sendNow() {
-    const phone = document.getElementById('send-phone').value.trim();
     const message = document.getElementById('send-msg').value.trim();
-    if (!phone || !message) return showToast('Fill in all fields', true);
-    const res = await fetch('/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, message }) });
-    const data = await res.json();
-    if (data.success) { showToast('Message sent!'); document.getElementById('send-msg').value = ''; }
-    else showToast(data.error || 'Failed to send', true);
+    if (!message) return showToast('Enter a message', true);
+
+    if (qsMode === 'tag') {
+      const tag = document.getElementById('send-tag').value;
+      if (!tag) return showToast('Select a tag', true);
+      const phones = getContactsByTag(tag).map(c => c.phone);
+      if (!phones.length) return showToast(`No contacts with tag "${tag}"`, true);
+      const res = await fetch('/api/send_bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phones, message }) });
+      const data = await res.json();
+      if (data.success) { showToast(`Sent to ${data.sent} contacts!`); document.getElementById('send-msg').value = ''; }
+      else showToast(data.error || 'Failed', true);
+    } else {
+      const phone = document.getElementById('send-phone').value.trim();
+      if (!phone) return showToast('Select a contact or enter a phone', true);
+      const res = await fetch('/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, message }) });
+      const data = await res.json();
+      if (data.success) { showToast('Message sent!'); document.getElementById('send-msg').value = ''; }
+      else showToast(data.error || 'Failed to send', true);
+    }
   }
 
   // ─── SCHEDULE ────────────────────────────────────────────
