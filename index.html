@@ -112,6 +112,26 @@
     .delete-btn{background:transparent;border:1px solid var(--border);color:var(--danger);padding:5px 10px;border-radius:5px;font-size:0.7rem;cursor:pointer;font-family:'Space Mono',monospace;white-space:nowrap;}
     .delete-btn:hover{border-color:var(--danger);}
     .section-title{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:2px;text-transform:uppercase;color:var(--green);margin-bottom:12px;}
+
+    /* LOG */
+    .log-item{display:grid;grid-template-columns:140px 1fr auto;align-items:start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border);transition:background 0.15s;}
+    .log-item:last-child{border-bottom:none;}
+    .log-item:hover{background:var(--surface2);}
+    .log-meta{display:flex;flex-direction:column;gap:3px;}
+    .log-phone{font-family:'Space Mono',monospace;font-size:0.78rem;color:var(--green);}
+    .log-time{font-size:0.7rem;color:var(--muted);}
+    .log-msg{font-size:0.85rem;line-height:1.4;word-break:break-word;}
+    .log-badges{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+    .badge{font-family:'Space Mono',monospace;font-size:0.6rem;padding:3px 8px;border-radius:10px;font-weight:700;white-space:nowrap;}
+    .badge-sent{background:#1a3d28;color:#25d366;}
+    .badge-failed{background:#3d1a1a;color:#e05555;}
+    .badge-manual{background:#1f1f2e;color:#74c0fc;}
+    .badge-broadcast{background:#2e1f1f;color:#ffa94d;}
+    .badge-scheduled{background:#1f2e1f;color:#a9e34b;}
+    .badge-recurring{background:#2a1f2e;color:#cc5de8;}
+    .stat-chip{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);}
+    .stat-chip span{display:block;font-size:1.1rem;color:var(--text);font-weight:700;margin-bottom:2px;}
+
     .toast{position:fixed;bottom:24px;right:24px;background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--green);padding:12px 20px;border-radius:8px;font-size:0.85rem;opacity:0;transform:translateY(10px);transition:all 0.3s;pointer-events:none;z-index:999;}
     .toast.show{opacity:1;transform:translateY(0);}
     .toast.error{border-left-color:var(--danger);}
@@ -140,6 +160,7 @@
   <div class="tab active" onclick="switchTab('quick')">Quick Send</div>
   <div class="tab" onclick="switchTab('calendar')">Calendar</div>
   <div class="tab" onclick="switchTab('contacts')">Contacts</div>
+  <div class="tab" onclick="switchTab('log')">Log</div>
 </div>
 
 <!-- ===== QUICK MENU ===== -->
@@ -286,6 +307,34 @@
   </div>
 </div>
 
+
+<!-- ===== LOG ===== -->
+<div class="panel" id="panel-log">
+  <div class="container">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:gap;">
+        <h2 style="margin-bottom:0;">Message Log</h2>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="log-search" placeholder="Search phone or message..." style="width:220px;margin:0;" oninput="loadLogs()"/>
+          <select id="log-source-filter" style="width:140px;margin:0;" onchange="loadLogs()">
+            <option value="">All Sources</option>
+            <option value="manual">Manual</option>
+            <option value="broadcast">Broadcast</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="recurring:daily">Recurring Daily</option>
+            <option value="recurring:weekly">Recurring Weekly</option>
+            <option value="recurring:yearly">Recurring Yearly</option>
+          </select>
+          <button class="btn btn-danger btn-sm" onclick="clearLogs()" style="margin:0;">CLEAR ALL</button>
+        </div>
+      </div>
+      <div id="log-stats" style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;"></div>
+      <div id="log-list"><div class="empty">No messages logged yet</div></div>
+      <div id="log-pagination" style="display:flex;gap:8px;justify-content:center;margin-top:16px;"></div>
+    </div>
+  </div>
+</div>
+
 <!-- QR Modal -->
 <div class="modal-overlay" id="qr-modal">
   <div class="modal">
@@ -379,12 +428,13 @@
 
   // ─── TABS ────────────────────────────────────────────────
   function switchTab(name) {
-    ['quick','calendar','contacts'].forEach((t, i) => {
+    ['quick','calendar','contacts','log'].forEach((t, i) => {
       document.querySelectorAll('.tab')[i].classList.toggle('active', t === name);
       document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
     });
     if (name === 'calendar') { renderFullCal(); loadJobs(); }
     if (name === 'contacts') { renderContactTable(); renderTagFilters(); }
+    if (name === 'log') loadLogs();
   }
 
   // ─── TOAST ───────────────────────────────────────────────
@@ -396,6 +446,8 @@
   }
 
   // ─── STATUS ──────────────────────────────────────────────
+  let wasConnected = null;
+
   async function checkStatus() {
     try {
       const res = await fetch('/api/status');
@@ -403,9 +455,41 @@
       const dot = document.getElementById('status-dot');
       const txt = document.getElementById('status-text');
       const banner = document.getElementById('qr-banner');
-      if (data.ready) { dot.className='dot online'; txt.textContent='Connected'; banner.classList.remove('visible'); }
-      else { dot.className='dot'; txt.textContent='Disconnected'; banner.classList.add('visible'); }
-    } catch { document.getElementById('status-text').textContent = 'Bridge Offline'; }
+      if (data.ready) {
+        dot.className='dot online'; txt.textContent='Connected'; banner.classList.remove('visible');
+        if (wasConnected === false) showAlert('✅ WhatsApp connected!', 'success');
+        wasConnected = true;
+      } else {
+        dot.className='dot'; txt.textContent='Disconnected'; banner.classList.add('visible');
+        if (wasConnected === true) showAlert('⚠️ WhatsApp disconnected', 'error');
+        wasConnected = false;
+      }
+    } catch {
+      document.getElementById('status-text').textContent = 'Bridge Offline';
+    }
+  }
+
+  function showAlert(msg, type='success') {
+    let el = document.getElementById('wa-alert');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'wa-alert';
+      el.style.cssText = `position:fixed;top:24px;left:50%;transform:translateX(-50%) translateY(-80px);
+        padding:14px 28px;border-radius:10px;font-family:'Space Mono',monospace;font-size:0.82rem;
+        font-weight:700;letter-spacing:1px;z-index:9999;transition:transform 0.4s cubic-bezier(.34,1.56,.64,1),opacity 0.3s;
+        opacity:0;box-shadow:0 8px 32px rgba(0,0,0,0.4);`;
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.background = type === 'success' ? '#25d366' : '#e05555';
+    el.style.color = type === 'success' ? '#000' : '#fff';
+    el.style.opacity = '1';
+    el.style.transform = 'translateX(-50%) translateY(0)';
+    clearTimeout(el._timer);
+    el._timer = setTimeout(() => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateX(-50%) translateY(-80px)';
+    }, 4000);
   }
 
   async function showQR() {
@@ -508,7 +592,10 @@
       <thead><tr><th>Name</th><th>Phone</th><th>Tags</th><th></th></tr></thead>
       <tbody>${filtered.map(c => {
         const realIdx = contacts.indexOf(c);
-        const tagsHTML = (c.tags || []).map(t => tagBadge(t)).join('');
+        const tagsHTML = (c.tags || []).map((t, ti) => {
+          const [bg, fg] = tagColor(t);
+          return `<span class="tag" style="background:${bg};color:${fg};border:none;cursor:default;user-select:none;">${t}<button onclick="event.stopPropagation();removeContactTag(${realIdx},${ti})" style="background:none;border:none;color:${fg};cursor:pointer;margin-left:5px;font-size:0.7rem;padding:0;line-height:1;opacity:0.75;font-weight:bold;" title="Remove tag">✕</button></span>`;
+        }).join('');
         return `<tr>
           <td>${c.name}</td>
           <td class="contact-phone-cell">${c.phone}</td>
@@ -550,6 +637,15 @@
     renderContactTable();
     renderTagFilters();
     showToast('Contact removed');
+  }
+
+  function removeContactTag(contactIdx, tagIdx) {
+    contacts[contactIdx].tags.splice(tagIdx, 1);
+    saveContacts();
+    updateAllDropdowns();
+    renderContactTable();
+    renderTagFilters();
+    showToast('Tag removed');
   }
 
   function fillPhone(selectId, inputId) {
@@ -785,6 +881,85 @@
 
   function fullCalPrev() { fullCalDate = new Date(fullCalDate.getFullYear(), fullCalDate.getMonth()-1, 1); renderFullCal(); }
   function fullCalNext() { fullCalDate = new Date(fullCalDate.getFullYear(), fullCalDate.getMonth()+1, 1); renderFullCal(); }
+
+
+  // ─── LOG ──────────────────────────────────────────────────
+  let logPage = 0;
+  const LOG_LIMIT = 50;
+
+  const SOURCE_LABELS = {
+    manual: ['badge-manual', 'Manual'],
+    broadcast: ['badge-broadcast', 'Broadcast'],
+    scheduled: ['badge-scheduled', 'Scheduled'],
+    'recurring:daily':  ['badge-recurring', '🔁 Daily'],
+    'recurring:weekly': ['badge-recurring', '🔁 Weekly'],
+    'recurring:yearly': ['badge-recurring', '🔁 Yearly'],
+  };
+
+  async function loadLogs(page = 0) {
+    logPage = page;
+    const search = document.getElementById('log-search')?.value || '';
+    const source = document.getElementById('log-source-filter')?.value || '';
+    const params = new URLSearchParams({ limit: LOG_LIMIT, offset: page * LOG_LIMIT, search, source });
+    const res = await fetch('/api/logs?' + params);
+    const data = await res.json();
+    renderLogs(data.logs, data.total);
+  }
+
+  function renderLogs(logs, total) {
+    const list = document.getElementById('log-list');
+    if (!logs.length) { list.innerHTML = '<div class="empty">No messages found</div>'; renderLogStats([]); renderLogPagination(0, 0); return; }
+
+    list.innerHTML = logs.map(l => {
+      const name = contacts.find(c => c.phone === l.phone)?.name || null;
+      const displayPhone = name ? `${name}<br><span style="font-size:0.7rem;color:var(--muted)">${l.phone}</span>` : l.phone;
+      const statusBadge = l.status === 'sent'
+        ? '<span class="badge badge-sent">✓ Sent</span>'
+        : '<span class="badge badge-failed">✗ Failed</span>';
+      const [srcClass, srcLabel] = SOURCE_LABELS[l.source] || ['badge-manual', l.source];
+      const srcBadge = `<span class="badge ${srcClass}">${srcLabel}</span>`;
+      return `<div class="log-item">
+        <div class="log-meta">
+          <div class="log-phone">${displayPhone}</div>
+          <div class="log-time">${l.sent_at}</div>
+        </div>
+        <div class="log-msg">${l.message}</div>
+        <div class="log-badges">${statusBadge}${srcBadge}</div>
+      </div>`;
+    }).join('');
+
+    renderLogStats(logs);
+    renderLogPagination(total, logPage);
+  }
+
+  function renderLogStats(logs) {
+    const sent = logs.filter(l => l.status === 'sent').length;
+    const failed = logs.filter(l => l.status === 'failed').length;
+    const sources = [...new Set(logs.map(l => l.source))];
+    document.getElementById('log-stats').innerHTML = `
+      <div class="stat-chip"><span>${sent}</span>Sent</div>
+      <div class="stat-chip"><span>${failed}</span>Failed</div>
+      <div class="stat-chip"><span>${logs.length}</span>Showing</div>
+    `;
+  }
+
+  function renderLogPagination(total, page) {
+    const pages = Math.ceil(total / LOG_LIMIT);
+    const el = document.getElementById('log-pagination');
+    if (pages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    if (page > 0) html += `<button class="btn btn-sm btn-outline" onclick="loadLogs(${page-1})">‹ Prev</button>`;
+    html += `<span style="font-size:0.75rem;color:var(--muted);align-self:center;font-family:'Space Mono',monospace">Page ${page+1} / ${pages}</span>`;
+    if (page < pages - 1) html += `<button class="btn btn-sm btn-outline" onclick="loadLogs(${page+1})">Next ›</button>`;
+    el.innerHTML = html;
+  }
+
+  async function clearLogs() {
+    if (!confirm('Clear all message logs? This cannot be undone.')) return;
+    await fetch('/api/logs', { method: 'DELETE' });
+    showToast('Logs cleared');
+    loadLogs();
+  }
 
   // ─── INIT ─────────────────────────────────────────────────
   initTagInput();
