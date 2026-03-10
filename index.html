@@ -45,6 +45,10 @@
 
 
     .tag{display:inline-block;background:var(--surface2);border:1px solid var(--border);color:var(--green);font-family:'Space Mono',monospace;font-size:0.65rem;padding:3px 8px;border-radius:20px;margin:2px;}
+    .tag-pill{display:inline-flex;align-items:center;gap:5px;font-family:'Space Mono',monospace;font-size:0.65rem;font-weight:700;padding:4px 10px;border-radius:20px;margin:2px;letter-spacing:0.5px;animation:popIn 0.15s ease;}
+    .tag-pill-x{cursor:pointer;opacity:0.7;font-size:0.7rem;line-height:1;background:none;border:none;color:inherit;padding:0;}
+    .tag-pill-x:hover{opacity:1;}
+    @keyframes popIn{from{transform:scale(0.7);opacity:0;}to{transform:scale(1);opacity:1;}}
     .tag-filter{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;}
     .tag-filter-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-family:'Space Mono',monospace;font-size:0.65rem;padding:4px 10px;border-radius:20px;cursor:pointer;transition:all 0.2s;}
     .tag-filter-btn:hover,.tag-filter-btn.active{background:var(--green);color:#000;border-color:var(--green);}
@@ -374,7 +378,7 @@
 
   function tagBadge(label) {
     const [bg, text] = tagColor(label);
-    return `<span class="tag" style="background:${bg};color:${text};border:none">${label}</span>`;
+    return `<span class="tag-pill" style="background:${bg};color:${text};">${label}</span>`;
   }
 
   // Live tag pill input
@@ -522,11 +526,12 @@
     const tags = getAllTags();
     const container = document.getElementById('tag-filters');
     if (!tags.length) { container.innerHTML = ''; return; }
-    const allBtn = `<button class="tag-filter-btn ${!activeTagFilter ? 'active' : ''}" onclick="filterByTag(null)" style="background:#2a2a2a;color:var(--text)">All</button>`;
+    const allBtn = `<button onclick="filterByTag(null)" style="background:${!activeTagFilter?'var(--green)':'#2a2a2a'};color:${!activeTagFilter?'#000':'var(--text)'};font-family:'Space Mono',monospace;font-size:0.65rem;font-weight:700;padding:4px 12px;border-radius:20px;border:none;cursor:pointer;margin:2px;">All</button>`;
     const tagBtns = tags.map(t => {
       const [bg, txt] = tagColor(t);
       const isActive = activeTagFilter === t;
-      return `<button class="tag-filter-btn ${isActive ? 'active' : ''}" onclick="filterByTag('${t}')" style="background:${bg};color:${txt}">${t}</button>`;
+      const style = `background:${bg};color:${txt};opacity:${isActive?'1':'0.65'};outline:${isActive?'2px solid '+bg:'none'};outline-offset:2px;font-family:'Space Mono',monospace;font-size:0.65rem;font-weight:700;padding:4px 12px;border-radius:20px;border:none;cursor:pointer;margin:2px;`;
+      return `<button onclick="filterByTag('${t}')" style="${style}">${t}</button>`;
     }).join('');
     container.innerHTML = allBtn + tagBtns;
 
@@ -599,7 +604,7 @@
       <tbody>${filtered.map(c => {
         const tagsHTML = (c.tags || []).map((t, ti) => {
           const [bg, fg] = tagColor(t);
-          return `<span class="tag" style="background:${bg};color:${fg};border:none;cursor:default;user-select:none;">${t}<button onclick="event.stopPropagation();removeContactTag(${c.id},${ti})" style="background:none;border:none;color:${fg};cursor:pointer;margin-left:5px;font-size:0.7rem;padding:0;line-height:1;opacity:0.75;font-weight:bold;" title="Remove tag">✕</button></span>`;
+          return `<span class="tag-pill" style="background:${bg};color:${fg};">${t}<span class="tag-pill-x" onclick="event.stopPropagation();removeContactTag(${c.id},${ti})" title="Remove tag">✕</span></span>`;
         }).join('');
         return `<tr>
           <td>${c.name}</td>
