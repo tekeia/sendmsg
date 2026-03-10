@@ -418,7 +418,7 @@
   }
 
   // ─── STATE ───────────────────────────────────────────────
-  let contacts = JSON.parse(localStorage.getItem('wpp_contacts') || '[]');
+  let contacts = []; // loaded from server
   let allJobs = [];
   let miniCalDate = new Date();
   let fullCalDate = new Date();
@@ -551,7 +551,13 @@
   }
 
   // ─── CONTACTS ────────────────────────────────────────────
-  function saveContacts() { localStorage.setItem('wpp_contacts', JSON.stringify(contacts)); }
+  async function fetchContacts() {
+    const res = await fetch('/api/contacts');
+    contacts = await res.json();
+    updateAllDropdowns();
+    renderTagFilters();
+    renderContactTable();
+  }
 
   function updateAllDropdowns() {
     ['send-contact','sched-contact'].forEach(id => {
@@ -591,52 +597,91 @@
     wrap.innerHTML = `<table class="contact-table">
       <thead><tr><th>Name</th><th>Phone</th><th>Tags</th><th></th></tr></thead>
       <tbody>${filtered.map(c => {
-        const realIdx = contacts.indexOf(c);
         const tagsHTML = (c.tags || []).map((t, ti) => {
           const [bg, fg] = tagColor(t);
-          return `<span class="tag" style="background:${bg};color:${fg};border:none;cursor:default;user-select:none;">${t}<button onclick="event.stopPropagation();removeContactTag(${realIdx},${ti})" style="background:none;border:none;color:${fg};cursor:pointer;margin-left:5px;font-size:0.7rem;padding:0;line-height:1;opacity:0.75;font-weight:bold;" title="Remove tag">✕</button></span>`;
+          return `<span class="tag" style="background:${bg};color:${fg};border:none;cursor:default;user-select:none;">${t}<button onclick="event.stopPropagation();removeContactTag(${c.id},${ti})" style="background:none;border:none;color:${fg};cursor:pointer;margin-left:5px;font-size:0.7rem;padding:0;line-height:1;opacity:0.75;font-weight:bold;" title="Remove tag">✕</button></span>`;
         }).join('');
         return `<tr>
           <td>${c.name}</td>
           <td class="contact-phone-cell">${c.phone}</td>
-          <td>${tagsHTML || '<span style="color:var(--muted);font-size:0.75rem">—</span>'}</td>
+          <td>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;">
+              ${tagsHTML}
+              <input
+                id="tag-add-${c.id}"
+                type="text"
+                placeholder="+ tag"
+                onkeydown="handleInlineTagKey(event, ${c.id})"
+                style="background:transparent;border:1px dashed var(--border);border-radius:20px;color:var(--muted);
+                       font-family:'Space Mono',monospace;font-size:0.65rem;padding:3px 8px;width:64px;
+                       outline:none;transition:all 0.2s;"
+                onfocus="this.style.borderColor='var(--green)';this.style.color='var(--text)';this.style.width='90px';"
+                onblur="this.style.borderColor='var(--border)';this.style.color='var(--muted)';this.style.width='64px';this.value='';"
+              />
+            </div>
+          </td>
           <td style="display:flex;gap:6px;justify-content:flex-end;">
             <button class="btn btn-sm btn-green" onclick="quickSendTo('${c.phone}')">Send</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteContact(${realIdx})">✕</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteContact(${c.id})">✕</button>
           </td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
   }
 
-  function addContact() {
+  async function addContact() {
     const name = document.getElementById('new-name').value.trim();
     const phone = document.getElementById('new-phone').value.trim();
-    // Also grab any partially typed tag
     const typingVal = document.getElementById('tag-typing').value.trim().toLowerCase();
     if (typingVal && !pendingTags.includes(typingVal)) pendingTags.push(typingVal);
     const tags = [...pendingTags];
     if (!name || !phone) return showToast('Name and phone are required', true);
-    contacts.push({ name, phone, tags });
-    saveContacts();
-    updateAllDropdowns();
-    renderContactTable();
-    renderTagFilters();
+    const res = await fetch('/api/contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, phone, tags })
+    });
+    const data = await res.json();
+    if (!data.success) return showToast(data.error || 'Failed to add contact', true);
     document.getElementById('new-name').value = '';
     document.getElementById('new-phone').value = '';
     document.getElementById('tag-typing').value = '';
     pendingTags = [];
     renderPillPreview();
+    await fetchContacts();
     showToast('Contact added!');
   }
 
-  function deleteContact(i) {
-    contacts.splice(i, 1);
-    saveContacts();
-    updateAllDropdowns();
-    renderContactTable();
-    renderTagFilters();
+  async function deleteContact(id) {
+    await fetch(`/api/contacts/${id}`, { method: 'DELETE' });
+    await fetchContacts();
     showToast('Contact removed');
+  }
+
+  async function handleInlineTagKey(e, contactId) {
+    if (e.key === ',' || e.key === 'Enter') {
+      e.preventDefault();
+      const val = e.target.value.replace(',', '').trim().toLowerCase();
+      if (!val) return;
+      const c = contacts.find(c => c.id === contactId);
+      if (!c) return;
+      if ((c.tags || []).includes(val)) {
+        e.target.value = '';
+        return showToast('Tag already exists', true);
+      }
+      c.tags = [...(c.tags || []), val];
+      await fetch(`/api/contacts/${contactId}/tags`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: c.tags })
+      });
+      await fetchContacts();
+      setTimeout(() => {
+        const el = document.getElementById(`tag-add-${contactId}`);
+        if (el) el.focus();
+      }, 50);
+      showToast('Tag added');
+    }
   }
 
   function removeContactTag(contactIdx, tagIdx) {
@@ -965,9 +1010,25 @@
   initTagInput();
   checkStatus();
   setInterval(checkStatus, 5000);
-  updateAllDropdowns();
-  renderContactTable();
-  renderTagFilters();
+
+  // One-time migration: import any localStorage contacts to the server
+  (async () => {
+    const legacy = JSON.parse(localStorage.getItem('wpp_contacts') || '[]');
+    if (legacy.length) {
+      for (const c of legacy) {
+        try {
+          await fetch('/api/contacts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: c.name, phone: c.phone, tags: c.tags || [] })
+          });
+        } catch {}
+      }
+      localStorage.removeItem('wpp_contacts');
+      showToast(`Migrated ${legacy.length} contacts to server`);
+    }
+    fetchContacts();
+  })();
   renderMiniCal();
   loadJobs();
   setInterval(loadJobs, 10000);
